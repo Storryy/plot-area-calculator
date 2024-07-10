@@ -132,6 +132,7 @@ class _MapPageState extends State<MapPage> {
               target: widget.mapPoints[0],
               zoom: 17,
             ),
+            compassEnabled: true,
             markers: _markers,
             polylines: _polylines,
             polygons: _polygons,

@@ -174,13 +174,15 @@ class EdgeDetectionState extends State<EdgeDetection>{
 
       setState(() {
         coordinates.add(position);
-        smoothCoordinates();
-        cornerDetectionV2();
+        print(coordinates);
       });
     });
   }
 
   Future<void> stopTracking() async {
+    smoothCoordinates();
+    print(smoothedCoordinates);
+    cornerDetectionV2();
     checker = 1;
     paddedSmoothCorners = List.from(corners);
 
@@ -260,29 +262,41 @@ class EdgeDetectionState extends State<EdgeDetection>{
   // OR this (cornerDetectionV2): I haven't tested much, but the latter feels like a better way of figuring out the corner.
 
   Future<void> cornerDetectionV2() async {
-    if (smoothedCoordinates.length > 2) {
-      Position beforePreviousCoordinate = smoothedCoordinates[smoothedCoordinates.length - 3];
-      Position previousCoordinate = smoothedCoordinates[smoothedCoordinates.length - 2];
-      Position currentCoordinate = smoothedCoordinates.last;
+      for (int i = 0; i < smoothedCoordinates.length; i++) {
+        int nextIndex = (i + 1) % smoothedCoordinates.length;
+        int nextToNextIndex = (i + 2) % smoothedCoordinates.length;
 
-      double bearing1 = Geolocator.bearingBetween(
-        beforePreviousCoordinate.latitude,
-        beforePreviousCoordinate.longitude,
-        previousCoordinate.latitude,
-        previousCoordinate.longitude,
-      );
+        Position currentCoordinate = smoothedCoordinates[i];
+        Position nextCoordinate = smoothedCoordinates[nextIndex];
+        Position afterNextCoordinate = smoothedCoordinates[nextToNextIndex];
 
-      double bearing2 = Geolocator.bearingBetween(
-        previousCoordinate.latitude,
-        previousCoordinate.longitude,
-        currentCoordinate.latitude,
-        currentCoordinate.longitude,
-      );
+        double bearing1 = Geolocator.bearingBetween(
+          currentCoordinate.latitude,
+          currentCoordinate.longitude,
+          nextCoordinate.latitude,
+          nextCoordinate.longitude,
+        );
 
-      double bearingChange = (bearing2 - bearing1).abs();
-      if (bearingChange >= bearingThreshold) {
-        corners.add(previousCoordinate);
+        double bearing2 = Geolocator.bearingBetween(
+          nextCoordinate.latitude,
+          nextCoordinate.longitude,
+          afterNextCoordinate.latitude,
+          afterNextCoordinate.longitude,
+        );
+
+        double bearingChange = (bearing2 - bearing1).abs();
+        if (bearingChange > 180) {
+          bearingChange = 360 - bearingChange;
+        }
+
+        print("b2 is $bearing2");
+        print("b1 is $bearing1");
+        print("bearing change is $bearingChange");
+
+        if (bearingChange >= bearingThreshold) {
+          corners.add(nextCoordinate);
+        }
+        print(corners.length);
       }
     }
-  }
 }
