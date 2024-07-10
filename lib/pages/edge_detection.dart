@@ -1,12 +1,15 @@
 // 2.2) This is the second page if you want corner detection to happen automatically
 
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:utecbuild6/pages/map_page.dart';
+import 'package:utecbuild6/pages/testing.dart';
 import '../services/calculations.dart';
 import 'camera_page.dart';
 
@@ -24,13 +27,14 @@ class EdgeDetectionState extends State<EdgeDetection>{
   List<Position> coordinates = [];
   List<Position> smoothedCoordinates = [];
   List<Position> corners = [];
+  List<Position> cornersFromJustCoords = [];
   List<Position> paddedSmoothCorners = [];
   List<String> facingDirectionList = [];
   List<double> distanceBetweenPoints = [];
   List<double?> angleBetweenSides = [];
   bool isTracking = false;
-  int windowSize = 3;
-  double bearingThreshold = 45.0;
+  int windowSize = 2;
+  double bearingThreshold = 30.0;
   double areaSqFt = 0.0;
   int checker = 0;
   StreamSubscription<Position>? positionStreamSubscription;
@@ -48,6 +52,9 @@ class EdgeDetectionState extends State<EdgeDetection>{
   }
 
   Widget openMap() {
+    print(smoothedCoordinates);
+    cornerDetectionV2();
+    paddedSmoothCorners = List.from(corners);
     if(checker == 1) {
       return ElevatedButton(onPressed: () async {
         areaSqFt = distanceCalculation.polygonArea(paddedSmoothCorners);
@@ -73,7 +80,7 @@ class EdgeDetectionState extends State<EdgeDetection>{
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please complete Tracking and calculate area first!")));
         }
 
-      }, child: const Text("Open Map!"));
+      }, child: const Text("Open Map final corners!"));
 
   }
     else{
@@ -128,9 +135,91 @@ class EdgeDetectionState extends State<EdgeDetection>{
                             ),
                           ),
                         ),
+                        const SizedBox(height: 20,),
+                        ElevatedButton(onPressed: (){
+                          areaSqFt = distanceCalculation.polygonArea(coordinates);
+
+                          if(coordinates.isNotEmpty && areaSqFt > 0.0) {
+                            List<LatLng> coords = coordinates.map((
+                                position) =>
+                                LatLng(position.latitude, position.longitude))
+                                .toList();
+
+                            var centroid = distanceCalculation.calculateCentroid(coords);
+
+                            Navigator.push(context, MaterialPageRoute(
+                                builder: (context) =>
+                                    MapPage(
+                                        mapPoints: coords,
+                                        area: areaSqFt,
+                                        centroid: centroid,
+                                        sideLengths: []
+                                    )));
+                          }
+
+                        }, child: Text("Open Maps plain coords")),
+
+                        const SizedBox(height: 20,),
+                        ElevatedButton(onPressed: (){
+                          print(coordinates);
+                          cornerDetectionV3OnPlainCoords();
+                          areaSqFt = distanceCalculation.polygonArea(cornersFromJustCoords);
+
+                          if(cornersFromJustCoords.isNotEmpty && areaSqFt > 0.0) {
+                            List<LatLng> babyCorners = cornersFromJustCoords.map((
+                                position) =>
+                                LatLng(position.latitude, position.longitude))
+                                .toList();
+
+                            var centroid = distanceCalculation.calculateCentroid(babyCorners);
+
+                            Navigator.push(context, MaterialPageRoute(
+                                builder: (context) =>
+                                    MapPage(
+                                        mapPoints: babyCorners,
+                                        area: areaSqFt,
+                                        centroid: centroid,
+                                        sideLengths: []
+                                    )));
+                          }
+
+                        }, child: Text("Open maps Corners on basic coords")),
+
+                        const SizedBox(height: 20,),
+                        ElevatedButton(onPressed: (){
+                          areaSqFt = distanceCalculation.polygonArea(smoothedCoordinates);
+
+                          if(smoothedCoordinates.isNotEmpty && areaSqFt > 0.0) {
+                            List<LatLng> smoothCoords = smoothedCoordinates.map((
+                                position) =>
+                                LatLng(position.latitude, position.longitude))
+                                .toList();
+
+                            var centroid = distanceCalculation.calculateCentroid(smoothCoords);
+
+                            Navigator.push(context, MaterialPageRoute(
+                                builder: (context) =>
+                                    MapPage(
+                                        mapPoints: smoothCoords,
+                                        area: areaSqFt,
+                                        centroid: centroid,
+                                        sideLengths: distanceBetweenPoints
+                                    )));
+                          }
+
+                        }, child: Text("Open Maps Smooth Coords")),
 
                         const SizedBox(height: 20,),
                         openMap(),
+
+                        const SizedBox(height: 20,),
+                        ElevatedButton(onPressed: () async {
+                          Position currentPosition = await Geolocator.getCurrentPosition(
+                            desiredAccuracy: LocationAccuracy.best,
+                          );
+                          Navigator.push(context, MaterialPageRoute(builder: (context) => testing(currentPostion: currentPosition)));
+                        }, child: Text("Testing")),
+
 
                         const SizedBox(height: 20,),
                         coordinatesBuild(),
@@ -180,11 +269,12 @@ class EdgeDetectionState extends State<EdgeDetection>{
   }
 
   Future<void> stopTracking() async {
+    await writeListToFile(coordinates);
+
+
     smoothCoordinates();
     print(smoothedCoordinates);
-    cornerDetectionV2();
     checker = 1;
-    paddedSmoothCorners = List.from(corners);
 
     ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -262,41 +352,97 @@ class EdgeDetectionState extends State<EdgeDetection>{
   // OR this (cornerDetectionV2): I haven't tested much, but the latter feels like a better way of figuring out the corner.
 
   Future<void> cornerDetectionV2() async {
-      for (int i = 0; i < smoothedCoordinates.length; i++) {
-        int nextIndex = (i + 1) % smoothedCoordinates.length;
-        int nextToNextIndex = (i + 2) % smoothedCoordinates.length;
+    for (int i = 0; i < smoothedCoordinates.length; i++) {
+      int nextIndex = (i + 1) % smoothedCoordinates.length;
+      int nextToNextIndex = (i + 2) % smoothedCoordinates.length;
 
-        Position currentCoordinate = smoothedCoordinates[i];
-        Position nextCoordinate = smoothedCoordinates[nextIndex];
-        Position afterNextCoordinate = smoothedCoordinates[nextToNextIndex];
+      Position currentCoordinate = smoothedCoordinates[i];
+      Position nextCoordinate = smoothedCoordinates[nextIndex];
+      Position afterNextCoordinate = smoothedCoordinates[nextToNextIndex];
 
-        double bearing1 = Geolocator.bearingBetween(
-          currentCoordinate.latitude,
-          currentCoordinate.longitude,
-          nextCoordinate.latitude,
-          nextCoordinate.longitude,
-        );
+      double bearing1 = Geolocator.bearingBetween(
+        currentCoordinate.latitude,
+        currentCoordinate.longitude,
+        nextCoordinate.latitude,
+        nextCoordinate.longitude,
+      );
 
-        double bearing2 = Geolocator.bearingBetween(
-          nextCoordinate.latitude,
-          nextCoordinate.longitude,
-          afterNextCoordinate.latitude,
-          afterNextCoordinate.longitude,
-        );
+      double bearing2 = Geolocator.bearingBetween(
+        nextCoordinate.latitude,
+        nextCoordinate.longitude,
+        afterNextCoordinate.latitude,
+        afterNextCoordinate.longitude,
+      );
 
-        double bearingChange = (bearing2 - bearing1).abs();
-        if (bearingChange > 180) {
-          bearingChange = 360 - bearingChange;
-        }
-
-        print("b2 is $bearing2");
-        print("b1 is $bearing1");
-        print("bearing change is $bearingChange");
-
-        if (bearingChange >= bearingThreshold) {
-          corners.add(nextCoordinate);
-        }
-        print(corners.length);
+      double bearingChange = (bearing2 - bearing1).abs();
+      if (bearingChange > 180) {
+        bearingChange = 360 - bearingChange;
       }
+
+      print("b2 is $bearing2");
+      print("b1 is $bearing1");
+      print("bearing change is $bearingChange");
+
+      if (bearingChange >= bearingThreshold) {
+        corners.add(nextCoordinate);
+      }
+      print(corners.length);
     }
+  }
+  Future<void> cornerDetectionV3OnPlainCoords() async {
+    for (int i = 0; i < coordinates.length; i++) {
+      int nextIndex = (i + 1) % coordinates.length;
+      int nextToNextIndex = (i + 2) % coordinates.length;
+
+      Position currentCoordinate = coordinates[i];
+      Position nextCoordinate = coordinates[nextIndex];
+      Position afterNextCoordinate = coordinates[nextToNextIndex];
+
+      double bearing1 = Geolocator.bearingBetween(
+        currentCoordinate.latitude,
+        currentCoordinate.longitude,
+        nextCoordinate.latitude,
+        nextCoordinate.longitude,
+      );
+
+      double bearing2 = Geolocator.bearingBetween(
+        nextCoordinate.latitude,
+        nextCoordinate.longitude,
+        afterNextCoordinate.latitude,
+        afterNextCoordinate.longitude,
+      );
+
+      double bearingChange = (bearing2 - bearing1).abs();
+      if (bearingChange > 180) {
+        bearingChange = 360 - bearingChange;
+      }
+
+      print("b2 is $bearing2");
+      print("b1 is $bearing1");
+      print("bearing change is $bearingChange");
+
+      if (bearingChange >= bearingThreshold) {
+        cornersFromJustCoords.add(nextCoordinate);
+      }
+      print(cornersFromJustCoords.length);
+    }
+  }
+
+  Future<String> getFilePath() async {
+    final directory = await getApplicationDocumentsDirectory();
+    return '${directory.path}/my_list.txt';
+  }
+
+  Future<void> writeListToFile(List<Position> myList) async {
+    final path = await getFilePath();
+    final file = File(path);
+
+    // Convert the list to a string with each item on a new line
+    final content = myList.join('\n');
+    await file.writeAsString(content);
+    print(path);
+
+  }
+
+
 }
